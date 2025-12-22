@@ -13,12 +13,10 @@ from aiogram.types import (
     CallbackQuery,
     ReplyKeyboardMarkup,
     KeyboardButton,
-    WebAppInfo,
 )
 
 from states import Booking, Support
-from db import init_db, add_booking, is_pc_available, get_last_booking, delete_booking, get_user_bookings, update_booking_api_id
-from api_client import club_api
+from db import init_db, add_booking, is_pc_available, get_last_booking, delete_booking, get_user_bookings
 
 TOKEN = "8276794506:AAEqmgZHNn8f-d33dki3XWhPCa0JXF7k3ck"
 ADMIN_ID = 7545686154  
@@ -26,8 +24,6 @@ ADMIN_ID = 7545686154
 VK_GROUP_LINK = "https://vk.com/cyberzona_rnd"
 MOBILE_APP_LINK = "https://cyberzona.parazey.com/"
 TOURNAMENT_CHAT_LINK = "https://t.me/tournament_cz"
-# URL Mini App (для разработки используйте localhost, для продакшена - ваш домен)
-MINI_APP_URL = "http://localhost:3000"  # Замените на https://your-domain.com для продакшена
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
@@ -58,7 +54,6 @@ async def start(message: Message):
 def main_menu():
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="🌐 Открыть Mini App", web_app=WebAppInfo(url=MINI_APP_URL))],
             [KeyboardButton(text="🎮 Забронировать ПК")],
             [KeyboardButton(text="📋 Мои брони"), KeyboardButton(text="❌ Отменить бронь")],
             [KeyboardButton(text="💬 Поддержка")],
@@ -128,15 +123,7 @@ async def cancel_booking(message: Message):
         await message.answer("❌ У вас нет активных броней")
         return
 
-    booking_id, pc, date, time_from, time_to, api_reservation_id = booking
-
-    # Удаляем из API, если есть api_reservation_id
-    if api_reservation_id:
-        success = await club_api.delete_reservation_user(api_reservation_id, message.from_user.id)
-        if success:
-            logger.info(f"Бронь удалена из API: reservation_id={api_reservation_id}, user_id={message.from_user.id}")
-        else:
-            logger.warning(f"Не удалось удалить бронь из API: reservation_id={api_reservation_id}")
+    booking_id, pc, date, time_from, time_to = booking
 
     await delete_booking(booking_id)
 
@@ -244,54 +231,13 @@ async def booking_time_to(message: Message, state: FSMContext):
 async def confirm_booking(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
 
-    # Сначала создаем бронь в локальной БД
-    booking_id = await add_booking(
+    await add_booking(
         user_id=callback.from_user.id,
         pc=data["pc"],
         date=data["date"],
         time_from=data["time_from"],
         time_to=data["time_to"]
     )
-
-    # Затем отправляем в API клубной программы
-    logger.info(f"Создание брони через API для пользователя {callback.from_user.id}")
-    api_result = await club_api.create_reservation(
-        user_id=callback.from_user.id,
-        pc_number=data["pc"],
-        date=data["date"],
-        time_from=data["time_from"],
-        time_to=data["time_to"],
-        username=callback.from_user.username
-    )
-
-    # Обрабатываем ответ API
-    if api_result:
-        logger.info(f"API вернул результат: {api_result}")
-        # Пытаемся извлечь ID из ответа API (может быть в разных форматах)
-        api_reservation_id = None
-        if isinstance(api_result, dict):
-            # Проверяем различные возможные поля с ID
-            api_reservation_id = (
-                api_result.get("id") or 
-                api_result.get("reservationId") or 
-                api_result.get("reservation_id") or
-                api_result.get("Id") or
-                api_result.get("ReservationId")
-            )
-            # Если есть success: True, но нет ID, это тоже успех
-            if api_result.get("success") and not api_reservation_id:
-                logger.info("Бронь успешно создана в API (пустой ответ, но статус 200)")
-        elif isinstance(api_result, (int, str)):
-            api_reservation_id = api_result
-        
-        if api_reservation_id and booking_id:
-            await update_booking_api_id(booking_id, api_reservation_id)
-            logger.info(f"Бронь синхронизирована с API: booking_id={booking_id}, api_reservation_id={api_reservation_id}")
-        elif not api_reservation_id:
-            logger.warning(f"API не вернул ID брони, но запрос был успешным. Ответ: {api_result}")
-            # Бронь может быть создана, но API не вернул ID - это нормально для некоторых API
-    else:
-        logger.error(f"API не вернул результат при создании брони. Проверьте логи выше для деталей.")
 
     await send_to_admin(
         "📢 Новая бронь!\n\n"
@@ -366,7 +312,7 @@ async def my_bookings(message: Message):
 
     text = "📋 Ваши брони:\n\n"
     for booking in bookings:
-        booking_id, pc, date, time_from, time_to, api_reservation_id = booking
+        booking_id, pc, date, time_from, time_to = booking
         text += f"🖥 ПК {pc}\n"
         text += f"📅 {date}\n"
         text += f"⏰ {time_from} – {time_to}\n"
